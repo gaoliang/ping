@@ -300,10 +300,10 @@ class Ping(object):
     def send_tcp_ping(self, current_socket, port):
 
         current_socket.connect((self.destination, port))
-        data = 'hello! TCP Server'
         send_time = default_timer()
         try:
-            current_socket.send(data.encode('utf-8'))
+            current_socket.send(
+                'GET / HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n'.format(self.destination).encode('utf8'))
         except socket.error:
             current_socket.close()
         return send_time

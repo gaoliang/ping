@@ -26,7 +26,7 @@ def test_udp(client):
 
 
 def test_tcp(client):
-    r = client.post(url_for('tcp_ping'), json={'host': '103.94.185.59', 'port': 8888})
+    r = client.post(url_for('tcp_ping'), json={'host': 'www.baidu.com', 'port': 80})
     assert r.status_code == 200
     result = r.json['result']
     assert result['delay'] > 0
