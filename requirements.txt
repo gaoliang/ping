@@ -1,2 +1,5 @@
 flask
 pywebview
+pytest-flask
+requests
+flask-cors

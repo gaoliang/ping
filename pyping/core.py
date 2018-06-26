@@ -35,10 +35,8 @@ def calculate_checksum(source_string):
     count = 0
 
     # Handle bytes in pairs (decoding as short ints)
-    loByte = 0
-    hiByte = 0
     while count < countTo:
-        if (sys.byteorder == "little"):
+        if sys.byteorder == "little":
             loByte = source_string[count]
             hiByte = source_string[count + 1]
         else:
@@ -89,34 +87,24 @@ def to_ip(addr):
     return socket.gethostbyname(addr)
 
 
-class Response(object):
-    def __init__(self):
-        self.max_rtt = None
-        self.min_rtt = None
-        self.avg_rtt = None
-        self.packet_lost = None
-        self.ttl = None
-        self.ret_code = None
+def get_host_ip():
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(('8.8.8.8', 80))
+        ip = s.getsockname()[0]
+    finally:
+        s.close()
 
-        self.packet_size = None
-        self.timeout = None
-        self.destination = None
-        self.destination_ip = None
+    return ip
 
 
 class Ping(object):
-    def __init__(self, destination, timeout=1000, packet_size=55, own_id=None, quiet_output=True, udp=False, bind=None):
-        self.response = Response()
-        self.response.destination = destination
-        self.response.timeout = timeout
-        self.response.packet_size = packet_size
-
+    def __init__(self, destination, timeout=1000, packet_size=55, own_id=None, udp=False, tcp=False, bind=None):
         self.destination = destination
         self.timeout = timeout
         self.packet_size = packet_size
         self.udp = udp
-        self.bind = bind
-        self.ttl = None
+        self.tcp = tcp
 
         if own_id is None:  # 标识符， 用于区分响应是否是自己的
             self.own_id = os.getpid() & 0xFFFF
@@ -126,18 +114,8 @@ class Ping(object):
         try:
             # FIXME: Use destination only for display this line here? see: https://github.com/jedie/python-ping/issues/3
             self.dest_ip = to_ip(self.destination)
-            if quiet_output:
-                self.response.destination_ip = self.dest_ip
         except socket.gaierror as e:
             pass
-
-        self.seq_number = 0
-        self.send_count = 0
-        self.receive_count = 0
-        self.min_time = 999999999
-        self.max_time = 0.0
-        self.ttl = 128
-        self.total_time = 0.0
 
     def header2dict(self, names, struct_format, data):
         """
@@ -151,135 +129,52 @@ class Ping(object):
         return dict(zip(names, unpacked_data))
 
     # --------------------------------------------------------------------------
-
-    def run(self, count=None, deadline=None):
-        """
-        循环执行
-        """
-        while True:
-            if self.udp:
-                delay = self.do_udp()
-            else:
-                delay = self.do()
-
-            self.seq_number += 1
-            if count and self.seq_number >= count:
-                break
-            if deadline and self.total_time >= deadline:
-                break
-
-            if delay == None:
-                delay = 0
-
-            # Pause for the remainder of the MAX_SLEEP period (if applicable)
-            if (MAX_SLEEP > delay):
-                time.sleep((MAX_SLEEP - delay) / 1000.0)
-
-        return self.response
-
-    def do_udp(self):
-        current_socket = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_UDP)
-        send_time = self.send_one_udp_ping(current_socket)
-        if send_time == None:
-            return
-        self.send_count += 1
-
-        receive_time, packet_size, ip, ip_header = self.receive_one_udp_ping(current_socket)
-        if receive_time:
-            self.receive_count += 1
-            delay = (receive_time - send_time) * 1000.0
-            self.total_time += delay
-            if self.min_time > delay:
-                self.min_time = delay
-            if self.max_time < delay:
-                self.max_time = delay
-            self.ttl = int(ip_header['ttl'])
-            return delay
+    def ping(self):
+        if self.udp:
+            return self.ping_udp()
+        elif self.tcp:
+            return self.ping_tcp()
         else:
-            pass
-        current_socket.close()
+            return self.ping_icmp()
 
-    def do(self):
-        """
-        Send one ICMP ECHO_REQUEST and receive the response until self.timeout
-        """
-        try:  # One could use UDP here, but it's obscure
-
+    def ping_icmp(self):
+        try:
             current_socket = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.getprotobyname("icmp"))
-
-            # Bind the socket to a source address
-            if self.bind:
-                current_socket.bind((self.bind, 0))  # Port number is irrelevant for ICMP
-
-        except socket.error as exc:
+        except socket.error as exc:  # 需要root权限
             if exc.errno == 1:
-                # Operation not permitted - Add more information to traceback
                 etype, evalue, etb = sys.exc_info()
                 evalue = etype(
                     "%s - Note that ICMP messages can only be send from processes running as root." % evalue
                 )
                 six.reraise(etype, evalue, etb)
-            raise  # raise the original error
+            raise
 
-        send_time = self.send_one_icmp_ping(current_socket)
-        if send_time == None:
-            return
-        self.send_count += 1
-
-        receive_time, packet_size, ip, ip_header, icmp_header = self.receive_one_icmp_ping(current_socket)
+        send_time = self.send_icmp_ping(current_socket)
+        receive_time, packet_size, ip, ip_header, icmp_header = self.receive_icmp_ping(current_socket)
         current_socket.close()
 
         if receive_time:
-            self.receive_count += 1
             delay = (receive_time - send_time) * 1000.0
-            self.total_time += delay
-            if self.min_time > delay:
-                self.min_time = delay
-            if self.max_time < delay:
-                self.max_time = delay
-            self.ttl = int(ip_header['ttl'])
-            return delay
+            ttl = int(ip_header['ttl'])
+            return {
+                'delay': delay,
+                'ttl': ttl,
+                'destination_ip': self.dest_ip,
+                'self_ip': get_host_ip()
+            }
         else:
-            pass
+            return None
 
-    def send_one_udp_ping(self, current_socket):
-
-        # zero = 0
-        #
-        # protocol = socket.IPPROTO_UDP
-        #
-        # data = "hello udp".encode('utf-8')
-        #
-        # udp_length = 8 + len(data)
-        #
-        # checksum = 0
-        # pseudo_header = struct.pack('!BBH', zero, protocol, udp_length)
-        # pseudo_header = src_ip + dest_ip + pseudo_header
-        # udp_header = struct.pack('!4H', src_port, dest_port, udp_length, checksum)
-        # checksum = checksum_func(pseudo_header + udp_header + data)
-        # udp_header = struct.pack('!4H', src_port, dest_port, udp_length, checksum)
-
-        send_time = default_timer()
-        packet = "hello udp".encode('utf-8')
-
-        try:
-            current_socket.sendto(packet, (self.destination, 31500))
-        except socket.error as e:
-            current_socket.close()
-            return
-
-        return send_time
-
-    def send_one_icmp_ping(self, current_socket):
+    def send_icmp_ping(self, current_socket):
         """
-        Send one ICMP ECHO_REQUEST
+        发送icmp的ECHO
         """
         # Header is type (8), code (8), checksum (16), id (16), sequence (16)
         checksum = 0
 
         # Make a dummy header with a 0 checksum.
         header = struct.pack(
-            "!BBHHH", ICMP_ECHO, 0, checksum, self.own_id, self.seq_number
+            "!BBHHH", ICMP_ECHO, 0, checksum, self.own_id, 0
         )
 
         padBytes = []
@@ -294,33 +189,42 @@ class Ping(object):
         # Now that we have the right checksum, we put that in. It's just easier
         # to make up a new header than to stuff it into the dummy.
         header = struct.pack(
-            "!BBHHH", ICMP_ECHO, 0, checksum, self.own_id, self.seq_number
+            "!BBHHH", ICMP_ECHO, 0, checksum, self.own_id, 0
         )
 
         packet = header + data
-
         send_time = default_timer()
-
         try:
-            current_socket.sendto(packet, (self.destination, 31500))  # Port number is irrelevant for ICMP
+            current_socket.sendto(packet, (self.destination, 31500))
         except socket.error as e:
-            self.response.output.append("General failure (%s)" % (e.args[1]))
             current_socket.close()
-            return
-
         return send_time
 
-    def receive_one_udp_ping(self, current_socket):
+    def receive_icmp_ping(self, current_socket):
+        """
+        接收一次ping请求的响应
+        :param current_socket: 当前使用的socket
+        :return:
+        """
         timeout = self.timeout / 1000.0
-        while True:  # 尝试接收响应，直到超时
-            select_start = default_timer()
-            # 使用linux的select进行IO
-            inputready, outputready, exceptready = select.select([current_socket], [], [], timeout)
-            select_duration = (default_timer() - select_start)
+        input_ready = select.select([current_socket], [], [], timeout)
+        if input_ready == []:  # timeout
+            return None, 0, 0, 0, 0
+        packet_data, address = current_socket.recvfrom(MAX_RECV)
+        # 解析icmp数据报文
+        icmp_header = self.header2dict(
+            names=[
+                "type", "code", "checksum",
+                "packet_id", "seq_number"
+            ],
+            struct_format="!BBHHH",
+            data=packet_data[20:28]
+        )
 
-            packet_data, address = current_socket.recvfrom(MAX_RECV)
-            receive_time = default_timer()
+        receive_time = default_timer()
 
+        if icmp_header["packet_id"] == self.own_id:  # 自己的包
+            # 解析ip数据报文
             ip_header = self.header2dict(
                 names=[
                     "version", "type", "length",
@@ -332,57 +236,83 @@ class Ping(object):
             )
             packet_size = len(packet_data) - 28
             ip = socket.inet_ntoa(struct.pack("!I", ip_header["src_ip"]))
-            return receive_time, packet_size, ip, ip_header
+            return receive_time, packet_size, ip, ip_header, icmp_header
 
-    def receive_one_icmp_ping(self, current_socket):
-        """
-        接收一次ping请求的响应
-        :param current_socket: 当前使用的socket
-        :return:
-        """
+    def ping_udp(self, port=9999):
+        current_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        current_socket.bind(('0.0.0.0', 0))
+
+        send_time = self.send_udp_ping(current_socket, port)
+        receive_time = self.receive_udp_ping(current_socket)
+        from_port = current_socket.getsockname()[1]
+        current_socket.close()
+
+        if receive_time:
+            delay = (receive_time - send_time) * 1000.0
+            return {
+                'delay': delay,
+                'destination_ip': self.dest_ip,
+                'from_port': from_port,
+                'target_port': port,
+                'self_ip': get_host_ip()
+            }
+        else:
+            return None
+
+    def send_udp_ping(self, current_socket, port):
+        data = 'hello! UDP Server'
+        send_time = default_timer()
+        try:
+            current_socket.sendto(data.encode('utf-8'), (self.destination, port))
+        except socket.error:
+            current_socket.close()
+        return send_time
+
+    def receive_udp_ping(self, current_socket):
         timeout = self.timeout / 1000.0
-
-        while True:  # 尝试接收响应，直到超时
-            select_start = default_timer()
-            inputready, outputready, exceptready = select.select([current_socket], [], [], timeout)
-            select_duration = (default_timer() - select_start)
-            if inputready == []:  # timeout
-                return None, 0, 0, 0, 0
-
-            packet_data, address = current_socket.recvfrom(MAX_RECV)
-
-            # 解析icmp数据报文
-            icmp_header = self.header2dict(
-                names=[
-                    "type", "code", "checksum",
-                    "packet_id", "seq_number"
-                ],
-                struct_format="!BBHHH",
-                data=packet_data[20:28]
-            )
-
+        receive_time = None
+        ready = select.select([current_socket], [], [], timeout)
+        if ready[0]:
+            current_socket.recvfrom(1024)
             receive_time = default_timer()
+        return receive_time
 
-            if icmp_header["packet_id"] == self.own_id:  # 自己的包
-                # 解析ip数据报文
-                ip_header = self.header2dict(
-                    names=[
-                        "version", "type", "length",
-                        "id", "flags", "ttl", "protocol",
-                        "checksum", "src_ip", "dest_ip"
-                    ],
-                    struct_format="!BBHHHBBHII",
-                    data=packet_data[:20]  # ip数据包头部长度为20字节
-                )
-                packet_size = len(packet_data) - 28
-                ip = socket.inet_ntoa(struct.pack("!I", ip_header["src_ip"]))
-                return receive_time, packet_size, ip, ip_header, icmp_header
+    def ping_tcp(self, port=8888):
+        current_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        from_port = current_socket.getsockname()[1]
+        send_time = self.send_tcp_ping(current_socket, port=port)
+        receive_time = self.receive_tcp_ping(current_socket)
+        current_socket.close()
 
-            timeout = timeout - select_duration
-            if timeout <= 0:
-                return None, 0, 0, 0, 0
+        if receive_time:
+            delay = (receive_time - send_time) * 1000.0
+            return {
+                'delay': delay,
+                'destination_ip': self.dest_ip,
+                'from_port': from_port,
+                'target_port': port,
+                'self_ip': get_host_ip()
 
+            }
+        else:
+            return None
 
-def ping(hostname, timeout=1000, count=3, packet_size=55, *args, **kwargs):
-    p = Ping(hostname, timeout, packet_size, *args, **kwargs)
-    return p.run(count)
+    def send_tcp_ping(self, current_socket, port):
+
+        current_socket.connect((self.destination, port))
+        data = 'hello! TCP Server'
+        send_time = default_timer()
+        try:
+            current_socket.send(data.encode('utf-8'))
+        except socket.error:
+            current_socket.close()
+        return send_time
+
+    def receive_tcp_ping(self, current_socket):
+        timeout = self.timeout / 1000.0
+        receive_time = None
+        ready = select.select([current_socket], [], [], timeout)
+        if ready[0]:
+            current_socket.recv(1024)
+            receive_time = default_timer()
+        return receive_time

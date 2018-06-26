@@ -9,6 +9,6 @@ def initialize():
 
 
 def do_stuff():
-    # do whatever you need to do
+    # do_icmp whatever you need to do_icmp
     response = "This is response from Python backend"
     return response
