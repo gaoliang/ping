@@ -241,7 +241,6 @@ class Ping(object):
     def ping_udp(self, port=9999):
         current_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         current_socket.bind(('0.0.0.0', 0))
-
         send_time = self.send_udp_ping(current_socket, port)
         receive_time = self.receive_udp_ping(current_socket)
         from_port = current_socket.getsockname()[1]
