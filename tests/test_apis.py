@@ -15,7 +15,7 @@ def test_icmp(client):
 
 
 def test_udp(client):
-    r = client.post(url_for('udp_ping'), json={'host': '103.94.185.59', 'port': 9999})
+    r = client.post(url_for('udp_ping'), json={'host': 'udp_test.gaoliang.im', 'port': 9999})
     assert r.status_code == 200
     result = r.json['result']
     assert result['delay'] > 0
