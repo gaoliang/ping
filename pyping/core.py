@@ -278,6 +278,7 @@ class Ping(object):
 
     def ping_tcp(self, port=8888):
         current_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        current_socket.bind(('0.0.0.0', 0))
         from_port = current_socket.getsockname()[1]
         send_time = self.send_tcp_ping(current_socket, port=port)
         receive_time = self.receive_tcp_ping(current_socket)
